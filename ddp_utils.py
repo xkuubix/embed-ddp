@@ -1,7 +1,6 @@
 import torch
 import os
 import torch.distributed as dist
-from torch.nn.parallel import DistributedDataParallel as DDP
 
 
 def init_distributed():
