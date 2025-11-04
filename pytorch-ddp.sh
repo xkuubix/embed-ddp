@@ -19,4 +19,4 @@
 GPU_NUMBER=4
 source /users/project1/pt01190/EUCAIM-PG-GUM/.venv_euc/bin/activate
 
-torchrun --nproc_per_node=$GPU_NUMBER /users/project1/pt01190/EUCAIM-PG-GUM/embed_ddp/train.py
+torchrun --nproc_per_node=$GPU_NUMBER /users/project1/pt01190/EUCAIM-PG-GUM/embed_ddp/main.py
