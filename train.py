@@ -2,11 +2,11 @@ import torch
 import os
 import torch.distributed as dist
 from torch import nn
-from data_utils import load_and_process_df
 from utils import setup_logging, train_loop
 from model_utils import build_model
 from ddp_utils import init_distributed
-from data_utils import load_and_process_df, create_dataloaders, preprocess_tensor
+from data_utils import load_and_process_df, preprocess_tensor, create_dataloaders
+
 
 META_DATA_PATH = '/users/scratch1/mg_25/EMBED/tables/EMBED_OpenData_metadata.csv'
 CLINICAL_DATA_PATH = '/users/scratch1/mg_25/EMBED/tables/EMBED_OpenData_clinical.csv'

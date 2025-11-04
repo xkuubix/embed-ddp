@@ -2,13 +2,12 @@ import pandas as pd
 import pydicom
 import numpy as np
 import torch
+import torch.nn.functional as F
+from torch.utils.data import Dataset
 import torch.distributed as dist
 from torch.utils.data.distributed import DistributedSampler
 from torch.utils.data import DataLoader, Subset
-from BreastDataset import BreastDataset
-import torch.nn.functional as F
 from torch.utils.data import WeightedRandomSampler
-
 
 def load_and_process_df(metadata_csv_path: str, clinical_csv_path: str) -> pd.DataFrame:
     table = pd.read_csv(metadata_csv_path)
@@ -73,7 +72,6 @@ def load_and_process_df(metadata_csv_path: str, clinical_csv_path: str) -> pd.Da
 
     print(df)
     return df
-
 
 def get_pixels_no_voi(ds, apply_voi=True, lut_index=0):
     """
@@ -159,7 +157,6 @@ def load_dicom_as_image(dicom_path):
     arr /= (arr.max() + 1e-8)
     return arr
 
-
 def preprocess_tensor(img: torch.Tensor, size=(1024, 1024)):
     """
     Resize and normalize a float tensor in tensor-space.
@@ -198,6 +195,29 @@ def preprocess_tensor(img: torch.Tensor, size=(1024, 1024)):
     img = (img - mean) / (std + 1e-8)
     return img
 
+class BreastDataset(Dataset):
+    def __init__(self, dataframe, transform=None):
+        self.items = []
+        self.dataframe = dataframe
+        self.transform = transform
+
+    def __len__(self):
+        return len(self.dataframe)
+
+    def __getitem__(self, idx):
+        path = self.dataframe.iloc[idx]['new_path']
+        y_text = str(self.dataframe.iloc[idx]['label']).strip().lower()
+        label_map = {'negative': 0, 'suspicious': 1}
+        if y_text not in label_map:
+            raise ValueError(f"Unknown label: {y_text}")
+        y = label_map[y_text]
+        dicom = load_dicom_as_image(path)
+        # im=(im-IM_MEAN)/IM_STD
+        dicom = torch.from_numpy(dicom).repeat(3,1,1)
+        if self.transform:
+            dicom = self.transform(dicom)
+        return dicom, torch.tensor(y,dtype=torch.long)
+    
 
 def create_dataloaders(train_files, val_files, transform, is_ddp, rank, world_size, local_rank, num_workers=12, per_gpu_batch=8):
     """
