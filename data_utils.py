@@ -10,9 +10,8 @@ from torch.utils.data import DataLoader, Subset
 from torch.utils.data import WeightedRandomSampler
 
 def load_and_process_df(metadata_csv_path: str, clinical_csv_path: str) -> pd.DataFrame:
-    table = pd.read_csv(metadata_csv_path)
-    clinical_table = pd.read_csv(clinical_csv_path)
-
+    table = pd.read_csv(metadata_csv_path, low_memory=False)
+    clinical_table = pd.read_csv(clinical_csv_path, low_memory=False)
     clin_L = clinical_table[clinical_table['side']=='L']
     clin_R = clinical_table[clinical_table['side']=='R']
     clin_B = clinical_table[clinical_table['side'].isin(['B', None])]
