@@ -1,8 +1,13 @@
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch import nn
-from torchvision.models import resnet50, ResNet50_Weights
+from models import GatedAttentionMIL
 
+def deactivate_batchnorm(model):
+    if isinstance(model, nn.BatchNorm2d):
+        model.track_running_stats = False
+        model.running_mean = None
+        model.running_var = None
 
 def build_model(device, is_ddp, rank, local_rank, use_pretrained=True):
     """
@@ -10,12 +15,12 @@ def build_model(device, is_ddp, rank, local_rank, use_pretrained=True):
     """
     if is_ddp and use_pretrained:
         if rank == 0:
-            m = resnet50(weights=ResNet50_Weights.IMAGENET1K_V2)
-            m.fc = nn.Linear(m.fc.in_features, 2)
+            m = GatedAttentionMIL()
+            m.apply(deactivate_batchnorm)
             sd = m.state_dict()
         else:
-            m = resnet50(weights=None)
-            m.fc = nn.Linear(m.fc.in_features, 2)
+            m = GatedAttentionMIL()
+            m.apply(deactivate_batchnorm)
             sd = None
 
         obj_list = [sd]
@@ -24,10 +29,11 @@ def build_model(device, is_ddp, rank, local_rank, use_pretrained=True):
         sd = obj_list[0]
         m.load_state_dict(sd)
     else:
-        weights = ResNet50_Weights.IMAGENET1K_V2 if use_pretrained else None
-        m = resnet50(weights=weights)
-        m.fc = nn.Linear(m.fc.in_features, 2)
+        m = GatedAttentionMIL()
+        m.apply(deactivate_batchnorm)
 
+    print(f"Model {m.__class__.__name__} built on device {device}")
+    
     m = m.to(device)
     if is_ddp:
         m = DDP(m, device_ids=[local_rank], output_device=local_rank)
