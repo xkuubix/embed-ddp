@@ -16,17 +16,17 @@ def main():
     logger = setup_logging()
 
     df = load_and_process_df(META_DATA_PATH, CLINICAL_DATA_PATH)
-    logger.info(f"Loaded dataframe with {len(df)} samples")
+    if rank == 0: logger.info(f"Loaded dataframe with {len(df)} samples")
 
     is_ddp, local_rank, rank, world_size = init_distributed()
-    logger.info(f"DDP mode: {is_ddp} rank={rank} world_size={world_size} local_rank={local_rank}")
-    logger.info(f"Available GPUs: {torch.cuda.device_count()}")
+    if rank == 0: logger.info(f"DDP mode: {is_ddp} rank={rank} world_size={world_size}")
+    if rank == 0: logger.info(f"Available GPUs: {torch.cuda.device_count()}")
 
     main_df = df[['new_path', 'label', 'cohort_num_x']].copy()
     del df
     train_files = main_df[main_df['cohort_num_x'] == 1]
     val_files = main_df[main_df['cohort_num_x'] == 2]
-    logger.info(f"Train samples: {len(train_files)}, Val samples: {len(val_files)}")
+    if rank == 0: logger.info(f"Train samples: {len(train_files)}, Val samples: {len(val_files)}")
 
     aug = v2.Compose([
         v2.RandomHorizontalFlip(p=0.5),

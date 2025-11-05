@@ -11,7 +11,9 @@ class ImagePatcher:
         self.bag_size = bag_size
         self.empty_thresh = empty_thresh
         self.tiles = None
-        logger.info(f"ImagePatcher initialized with patch_size={patch_size}, overlap={overlap}, bag_size={bag_size}, empty_thresh={empty_thresh}")
+        if torch.distributed.is_initialized():
+            rank = torch.distributed.get_rank()
+            if rank == 0: logger.info(f"ImagePatcher initialized with patch_size={patch_size}, overlap={overlap}, bag_size={bag_size}, empty_thresh={empty_thresh}")
 
     def _start_points(self, size, split_size):
         points = [0]
