@@ -11,6 +11,10 @@ from torch.utils.data import WeightedRandomSampler
 
 def load_and_process_df(metadata_csv_path: str, clinical_csv_path: str) -> pd.DataFrame:
     table = pd.read_csv(metadata_csv_path, low_memory=False)
+
+    # filter to 2D images only
+    table[table['FinalImageType'] =='2D']
+
     clinical_table = pd.read_csv(clinical_csv_path, low_memory=False)
     clin_L = clinical_table[clinical_table['side']=='L']
     clin_R = clinical_table[clinical_table['side']=='R']
@@ -69,7 +73,6 @@ def load_and_process_df(metadata_csv_path: str, clinical_csv_path: str) -> pd.Da
 
     df["new_path"] = df["anon_dicom_path"].apply(lambda x: get_local_path(x, DICOM_BASE_OLD, DICOM_BASE_NEW))
 
-    print(df)
     return df
 
 def get_pixels_no_voi(ds, apply_voi=True, lut_index=0):
