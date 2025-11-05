@@ -51,8 +51,8 @@ def train_loop(model, opt, crit, train_dl, val_dl, train_sampler, is_ddp, rank, 
                 imgs = imgs.to(next(model.parameters()).device, non_blocking=True)
                 labels = labels.to(next(model.parameters()).device, non_blocking=True)
                 outputs = model(imgs)
-                probs = torch.softmax(outputs, dim=1)[:,1]
-                preds = outputs.argmax(1)
+                probs = torch.sigmoid(outputs)
+                preds = (probs >= 0.5).long()
                 local_preds.extend(preds.cpu().tolist())
                 local_probs.extend(probs.cpu().tolist())
                 local_labels.extend(labels.cpu().tolist())

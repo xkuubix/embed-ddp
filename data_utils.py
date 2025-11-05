@@ -159,14 +159,12 @@ def load_dicom_as_image(dicom_path):
     arr /= (arr.max() + 1e-8)
     return arr
 
-def preprocess_tensor(img: torch.Tensor, size=(1024, 1024)):
+def preprocess_tensor(img: torch.Tensor):
     """
     Resize and normalize a float tensor in tensor-space.
     - img: torch.Tensor, shape (H,W) or (C,H,W). dtype=float (expected from load_dicom_as_image).
     - Returns: torch.FloatTensor shape (3, size[0], size[1]) normalized by IM_MEAN/IM_STD.
     """
-    IM_MEAN = np.array([0.485,0.456,0.406], np.float32)
-    IM_STD  = np.array([0.229,0.224,0.225], np.float32)
     # ensure tensor
     if not torch.is_tensor(img):
         img = torch.tensor(img)
@@ -182,8 +180,6 @@ def preprocess_tensor(img: torch.Tensor, size=(1024, 1024)):
         img = img.permute(2,0,1)
 
     img = img.float()
-    # resize in tensor space: expect N,C,H,W for interpolate
-    img = F.interpolate(img.unsqueeze(0), size=size, mode='bilinear', align_corners=False).squeeze(0)
 
     # per-sample per-channel scaling to [0,1] (preserves relative contrast)
     c = img.shape[0]
@@ -191,10 +187,6 @@ def preprocess_tensor(img: torch.Tensor, size=(1024, 1024)):
     maxs = img.view(c, -1).max(dim=1)[0].view(c,1,1)
     img = (img - mins) / (maxs - mins + 1e-8)
 
-    # normalize using IM_MEAN/IM_STD (create tensors on same device)
-    mean = torch.tensor(IM_MEAN, dtype=img.dtype, device=img.device).view(-1,1,1)
-    std  = torch.tensor(IM_STD,  dtype=img.dtype, device=img.device).view(-1,1,1)
-    img = (img - mean) / (std + 1e-8)
     return img
 
 class BreastDataset(Dataset):
@@ -218,10 +210,10 @@ class BreastDataset(Dataset):
         dicom = torch.from_numpy(dicom).repeat(3,1,1)
         if self.transform:
             dicom = self.transform(dicom)
-        return dicom, torch.tensor(y,dtype=torch.long)
+        return dicom, torch.tensor(y,dtype=torch.float32)
     
 
-def create_dataloaders(train_files, val_files, transform, is_ddp, rank, world_size, local_rank, num_workers=12, per_gpu_batch=8):
+def create_dataloaders(train_files, val_files, transform, is_ddp, rank, world_size, num_workers=12, per_gpu_batch=1):
     """
     Returns train_dl, val_dl, train_sampler (None for non-DDP).
     For DDP uses an oversampled Subset (broadcasted indices) so sampling is consistent across ranks.
@@ -235,16 +227,16 @@ def create_dataloaders(train_files, val_files, transform, is_ddp, rank, world_si
         sample_weights = torch.tensor([weights[int(t)] for t in labels], dtype=torch.double)
         sampler = WeightedRandomSampler(sample_weights, num_samples=len(sample_weights), replacement=True)
 
-        train_ds = BreastDataset(train_files, transform=transform)
-        val_ds = BreastDataset(val_files, transform=transform)
+        train_ds = BreastDataset(train_files, transform=transform['train'])
+        val_ds = BreastDataset(val_files, transform=transform['val'])
 
-        train_dl = DataLoader(train_ds, batch_size=32, sampler=sampler, num_workers=num_workers, pin_memory=torch.cuda.is_available())
-        val_dl = DataLoader(val_ds, batch_size=32, shuffle=False, num_workers=num_workers, pin_memory=torch.cuda.is_available())
+        train_dl = DataLoader(train_ds, batch_size=per_gpu_batch, sampler=sampler, num_workers=num_workers, pin_memory=torch.cuda.is_available())
+        val_dl = DataLoader(val_ds, batch_size=per_gpu_batch, shuffle=False, num_workers=num_workers, pin_memory=torch.cuda.is_available())
         return train_dl, val_dl, None
 
     # DDP branch: create balanced subset (upsample minority) on rank 0 and broadcast indices
-    train_ds = BreastDataset(train_files, transform=transform)
-    val_ds = BreastDataset(val_files, transform=transform)
+    train_ds = BreastDataset(train_files, transform=transform['train'])
+    val_ds = BreastDataset(val_files, transform=transform['val'])
 
     train_labels_arr = train_files['label'].str.lower().map({'negative': 0, 'suspicious': 1}).astype(np.int64).values
 
@@ -252,19 +244,7 @@ def create_dataloaders(train_files, val_files, transform, is_ddp, rank, world_si
     np.random.seed(SEED)
 
     if rank == 0:
-        pos = np.where(train_labels_arr == 1)[0]
-        neg = np.where(train_labels_arr == 0)[0]
-        if len(pos) == 0 or len(neg) == 0:
-            all_idx = np.arange(len(train_ds)).tolist()
-        else:
-            if len(pos) < len(neg):
-                pos_up = np.random.choice(pos, size=len(neg), replace=True)
-                all_idx = np.concatenate([neg, pos_up])
-            else:
-                neg_up = np.random.choice(neg, size=len(pos), replace=True)
-                all_idx = np.concatenate([pos, neg_up])
-            np.random.shuffle(all_idx)
-        all_idx = all_idx.tolist()
+        all_idx = balance_indices(train_labels_arr, mode='over')
     else:
         all_idx = None
 
@@ -283,3 +263,33 @@ def create_dataloaders(train_files, val_files, transform, is_ddp, rank, world_si
     val_dl = DataLoader(val_ds, batch_size=per_gpu_batch, sampler=val_sampler, num_workers=num_workers, pin_memory=True)
 
     return train_dl, val_dl, train_sampler
+
+
+def balance_indices(labels, mode='over'):
+    assert mode in (None, 'over', 'under'), "mode must be one of None, 'over', 'under'"
+    labels = np.array(labels)
+    pos = np.where(labels == 1)[0]
+    neg = np.where(labels == 0)[0]
+
+
+    if len(pos) == 0 or len(neg) == 0:
+        return np.arange(len(labels)).tolist()
+
+    if mode == "over":
+        if len(pos) < len(neg):
+            pos_up = np.random.choice(pos, size=len(neg), replace=True)
+            idx = np.concatenate([neg, pos_up])
+        else:
+            neg_up = np.random.choice(neg, size=len(pos), replace=True)
+            idx = np.concatenate([pos, neg_up])
+
+    elif mode == "under":
+        m = min(len(pos), len(neg))
+        pos_dn = np.random.choice(pos, size=m, replace=False)
+        neg_dn = np.random.choice(neg, size=m, replace=False)
+        idx = np.concatenate([pos_dn, neg_dn])
+    else:
+        idx = np.arange(len(labels)).tolist()
+
+    np.random.shuffle(idx)
+    return idx.tolist()
