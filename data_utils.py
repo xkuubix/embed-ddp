@@ -13,7 +13,7 @@ def load_and_process_df(metadata_csv_path: str, clinical_csv_path: str) -> pd.Da
     table = pd.read_csv(metadata_csv_path, low_memory=False)
 
     # filter to 2D images only
-    table[table['FinalImageType'] =='2D']
+    table = table[table['FinalImageType'] == '2D']
 
     clinical_table = pd.read_csv(clinical_csv_path, low_memory=False)
     clin_L = clinical_table[clinical_table['side']=='L']
