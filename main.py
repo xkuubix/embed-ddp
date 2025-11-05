@@ -1,10 +1,9 @@
 import torch
 import os
-import torch.distributed as dist
 from torch import nn
 from utils import setup_logging, train_loop
 from model_utils import build_model
-from ddp_utils import init_distributed
+from ddp_utils import init_distributed, cleanup_distributed
 from data_utils import load_and_process_df, preprocess_tensor, create_dataloaders
 from torchvision.transforms import v2
 from torchvision.transforms.functional import InterpolationMode
@@ -70,10 +69,8 @@ def main():
     train_loop(model, opt, crit, train_dl, val_dl, train_sampler, is_ddp, rank, world_size, logger, num_epochs=100)
 
     if is_ddp:
-        try:
-            dist.destroy_process_group()
-        except Exception:
-            pass
+        cleanup_distributed()
+
 
 if __name__ == "__main__":
     main()

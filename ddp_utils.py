@@ -22,3 +22,9 @@ def gather_from_ranks(obj, is_ddp, world_size):
     out = [None] * world_size
     dist.all_gather_object(out, obj)
     return out
+
+def cleanup_distributed():
+    try:
+        dist.destroy_process_group()
+    except Exception:
+        pass
