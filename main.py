@@ -27,7 +27,6 @@ def main():
     main_df = df[['new_path', 'label', 'cohort_num_x', 'empi_anon']].copy()
     train_df = main_df[main_df['cohort_num_x'] == 1]
     test_df = main_df[main_df['cohort_num_x'] == 2]
-    del df
     train_files, val_files = du.split_by_patient_stratified(
         train_df,
         patient_col='empi_anon',
@@ -35,6 +34,7 @@ def main():
         val_size=0.2,
         random_state=SEED
     )
+    del df, main_df, train_df
     if rank == 0:
         logger.info(format_counts(train_files, "Train"))
         logger.info(format_counts(val_files, "Val"))
@@ -67,18 +67,37 @@ def main():
         'val': transforms_val
     }
 
-    train_dl, val_dl, train_sampler = du.create_dataloaders(train_files, val_files, transform, is_ddp, rank, world_size)
+    train_dl, val_dl, train_sampler = du.create_dataloaders(
+        train_files, val_files, transform, is_ddp, rank, world_size, SEED)
 
     device = torch.device(f"cuda:{local_rank}" if torch.cuda.is_available() else "cpu")
 
-    model = build_model(device, is_ddp, rank, local_rank, use_pretrained=True)
+    model = build_model(
+        device,
+        is_ddp,
+        rank,
+        local_rank,
+        use_pretrained=True
+        )
 
     opt = torch.optim.AdamW(model.parameters(), lr=1e-4)
     crit = nn.BCEWithLogitsLoss().to(device)
 
     os.makedirs('./checkpoints', exist_ok=True)
 
-    train_loop(model, opt, crit, train_dl, val_dl, train_sampler, is_ddp, rank, world_size, logger, num_epochs=100)
+    train_loop(
+        model,
+        opt,
+        crit,
+        train_dl,
+        val_dl,
+        train_sampler,
+        is_ddp,
+        rank,
+        world_size,
+        logger,
+        num_epochs=100
+    )
 
     if is_ddp:
         cleanup_distributed()
