@@ -1,10 +1,10 @@
 import torch
 import os
 from torch import nn
-from utils import setup_logging, train_loop
+from utils import setup_logging, format_counts, reset_seed, train_loop
 from model_utils import build_model
 from ddp_utils import init_distributed, cleanup_distributed
-from data_utils import load_and_process_df, preprocess_tensor, create_dataloaders
+import data_utils as du
 from torchvision.transforms import v2
 from torchvision.transforms.functional import InterpolationMode
 
@@ -16,17 +16,28 @@ def main():
     logger = setup_logging()
 
     is_ddp, local_rank, rank, world_size = init_distributed()
-    if rank == 0: logger.info(f"DDP mode: {is_ddp} rank={rank} world_size={world_size}")
-    if rank == 0: logger.info(f"Available GPUs: {torch.cuda.device_count()}")
-    
-    df = load_and_process_df(META_DATA_PATH, CLINICAL_DATA_PATH)
+    reset_seed(42)
+    if rank == 0:
+        logger.info(f"DDP mode: {is_ddp} rank={rank} world_size={world_size}")
+        logger.info(f"Available GPUs: {torch.cuda.device_count()}")
+    df = du.load_and_process_df(META_DATA_PATH, CLINICAL_DATA_PATH)
     if rank == 0: logger.info(f"Loaded dataframe with {len(df)} samples")
 
-    main_df = df[['new_path', 'label', 'cohort_num_x']].copy()
+    main_df = df[['new_path', 'label', 'cohort_num_x', 'empi_anon']].copy()
+    train_df = main_df[main_df['cohort_num_x'] == 1]
+    test_df = main_df[main_df['cohort_num_x'] == 2]
     del df
-    train_files = main_df[main_df['cohort_num_x'] == 1]
-    val_files = main_df[main_df['cohort_num_x'] == 2]
-    if rank == 0: logger.info(f"Train samples: {len(train_files)}, Val samples: {len(val_files)}")
+    train_files, val_files = du.split_by_patient_stratified(
+        train_df,
+        patient_col='empi_anon',
+        label_col='label',
+        val_size=0.2,
+        random_state=42
+    )
+    if rank == 0:
+        logger.info(format_counts(train_files, "Train"))
+        logger.info(format_counts(val_files, "Val"))
+        logger.info(format_counts(test_df, "Test"))
 
     aug = v2.Compose([
         v2.RandomHorizontalFlip(p=0.5),
@@ -43,11 +54,11 @@ def main():
 
     def transforms_train(img):
         img = aug(img)
-        img = preprocess_tensor(img)
+        img = du.preprocess_tensor(img)
         return img
 
     def transforms_val(img):
-        img = preprocess_tensor(img)
+        img = du.preprocess_tensor(img)
         return img
 
     transform = {
@@ -55,7 +66,7 @@ def main():
         'val': transforms_val
     }
 
-    train_dl, val_dl, train_sampler = create_dataloaders(train_files, val_files, transform, is_ddp, rank, world_size)
+    train_dl, val_dl, train_sampler = du.create_dataloaders(train_files, val_files, transform, is_ddp, rank, world_size)
 
     device = torch.device(f"cuda:{local_rank}" if torch.cuda.is_available() else "cpu")
 

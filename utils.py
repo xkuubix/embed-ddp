@@ -4,6 +4,9 @@ import logging
 import time
 from torch.nn.parallel import DistributedDataParallel as DDP
 from ddp_utils import gather_from_ranks
+import random
+import numpy as np
+
 
 def setup_logging():
     logging.basicConfig(
@@ -12,6 +15,22 @@ def setup_logging():
         datefmt="%Y-%m-%d %H:%M:%S",
     )
     return logging.getLogger("training")
+
+
+def format_counts(df, name):
+    counts = df['label'].value_counts()
+    percents = df['label'].value_counts(normalize=True) * 100
+    lines = [f"\t{label}: {counts[label]} ({percents[label]:.1f}%)" for label in counts.index]
+    return f"{name} samples: {len(df)}\n" + "\n".join(lines)
+
+
+def reset_seed(SEED=42):
+    """Reset random seeds for reproducibility."""
+    random.seed(SEED)
+    np.random.seed(SEED)
+    torch.manual_seed(SEED)
+    torch.cuda.manual_seed(SEED)
+    torch.cuda.manual_seed_all(SEED)
 
 
 def train_loop(model, opt, crit, train_dl, val_dl, train_sampler, is_ddp, rank, world_size, logger, num_epochs=10):
