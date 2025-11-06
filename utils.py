@@ -33,6 +33,12 @@ def reset_seed(SEED=42):
     torch.cuda.manual_seed_all(SEED)
 
 
+def seed_worker(worker_id):
+    worker_seed = torch.initial_seed() % 2**32
+    np.random.seed(worker_seed)
+    random.seed(worker_seed)
+
+
 def train_loop(model, opt, crit, train_dl, val_dl, train_sampler, is_ddp, rank, world_size, logger, num_epochs=10):
     for epoch in range(num_epochs):
         logger.info(f"Epoch {epoch+1}/{num_epochs} starting (rank={rank})")

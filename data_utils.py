@@ -8,6 +8,7 @@ import torch.distributed as dist
 from torch.utils.data.distributed import DistributedSampler
 from torch.utils.data import DataLoader, Subset
 from torch.utils.data import WeightedRandomSampler
+from utils import seed_worker
 
 def load_and_process_df(metadata_csv_path: str, clinical_csv_path: str) -> pd.DataFrame:
     table = pd.read_csv(metadata_csv_path, low_memory=False)
@@ -239,12 +240,15 @@ class BreastDataset(Dataset):
         return dicom, torch.tensor(y,dtype=torch.float32)
     
 
-def create_dataloaders(train_files, val_files, transform, is_ddp, rank, world_size, num_workers=12, per_gpu_batch=1):
+def create_dataloaders(train_files, val_files, transform, is_ddp, rank, world_size, num_workers=12, per_gpu_batch=1, seed=42):
     """
     Returns train_dl, val_dl, train_sampler (None for non-DDP).
     For DDP uses an oversampled Subset (broadcasted indices) so sampling is consistent across ranks.
     """
     # single-process: WeightedRandomSampler
+    g = torch.Generator()
+    g.manual_seed(seed)
+
     if not is_ddp:
         labels = train_files['label'].str.lower().map({'negative': 0, 'suspicious': 1}).astype(np.int64).values
         class_sample_count = np.bincount(labels)
@@ -256,8 +260,24 @@ def create_dataloaders(train_files, val_files, transform, is_ddp, rank, world_si
         train_ds = BreastDataset(train_files, transform=transform['train'])
         val_ds = BreastDataset(val_files, transform=transform['val'])
 
-        train_dl = DataLoader(train_ds, batch_size=per_gpu_batch, sampler=sampler, num_workers=num_workers, pin_memory=torch.cuda.is_available())
-        val_dl = DataLoader(val_ds, batch_size=per_gpu_batch, shuffle=False, num_workers=num_workers, pin_memory=torch.cuda.is_available())
+        train_dl = DataLoader(
+            train_ds,
+            batch_size=per_gpu_batch,
+            sampler=sampler,
+            num_workers=num_workers,
+            pin_memory=torch.cuda.is_available(),
+            worker_init_fn=seed_worker,
+            generator=g
+            )
+        val_dl = DataLoader(
+            val_ds,
+            batch_size=per_gpu_batch,
+            shuffle=False,
+            num_workers=num_workers,
+            pin_memory=torch.cuda.is_available(),
+            worker_init_fn=seed_worker,
+            generator=g
+            )
         return train_dl, val_dl, None
 
     # DDP branch: create balanced subset (upsample minority) on rank 0 and broadcast indices
@@ -265,9 +285,6 @@ def create_dataloaders(train_files, val_files, transform, is_ddp, rank, world_si
     val_ds = BreastDataset(val_files, transform=transform['val'])
 
     train_labels_arr = train_files['label'].str.lower().map({'negative': 0, 'suspicious': 1}).astype(np.int64).values
-
-    SEED = 42
-    np.random.seed(SEED)
 
     if rank == 0:
         all_idx = balance_indices(train_labels_arr, mode='over')
@@ -285,8 +302,26 @@ def create_dataloaders(train_files, val_files, transform, is_ddp, rank, world_si
     train_sampler = DistributedSampler(train_subset, num_replicas=world_size, rank=rank, shuffle=True)
     val_sampler = DistributedSampler(val_ds, num_replicas=world_size, rank=rank, shuffle=False)
 
-    train_dl = DataLoader(train_subset, batch_size=per_gpu_batch, sampler=train_sampler, num_workers=num_workers, pin_memory=True)
-    val_dl = DataLoader(val_ds, batch_size=per_gpu_batch, sampler=val_sampler, num_workers=num_workers, pin_memory=True)
+    g = torch.Generator()
+    g.manual_seed(42)
+    train_dl = DataLoader(
+        train_subset,
+        batch_size=per_gpu_batch,
+        sampler=train_sampler,
+        num_workers=num_workers,
+        pin_memory=True,
+        worker_init_fn=seed_worker,
+        generator=g
+        )
+    val_dl = DataLoader(
+        val_ds,
+        batch_size=per_gpu_batch,
+        sampler=val_sampler,
+        num_workers=num_workers,
+        pin_memory=True,
+        worker_init_fn=seed_worker,
+        generator=g
+    )
 
     return train_dl, val_dl, train_sampler
 

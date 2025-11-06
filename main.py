@@ -11,12 +11,13 @@ from torchvision.transforms.functional import InterpolationMode
 META_DATA_PATH = '/users/scratch1/mg_25/EMBED/tables/EMBED_OpenData_metadata.csv'
 CLINICAL_DATA_PATH = '/users/scratch1/mg_25/EMBED/tables/EMBED_OpenData_clinical.csv'
 
+SEED = 42
 
 def main():
     logger = setup_logging()
 
     is_ddp, local_rank, rank, world_size = init_distributed()
-    reset_seed(42)
+    reset_seed(SEED)
     if rank == 0:
         logger.info(f"DDP mode: {is_ddp} rank={rank} world_size={world_size}")
         logger.info(f"Available GPUs: {torch.cuda.device_count()}")
@@ -32,7 +33,7 @@ def main():
         patient_col='empi_anon',
         label_col='label',
         val_size=0.2,
-        random_state=42
+        random_state=SEED
     )
     if rank == 0:
         logger.info(format_counts(train_files, "Train"))
