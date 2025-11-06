@@ -2,7 +2,7 @@ import pandas as pd
 import pydicom
 import numpy as np
 import torch
-import torch.nn.functional as F
+from sklearn.model_selection import train_test_split
 from torch.utils.data import Dataset
 import torch.distributed as dist
 from torch.utils.data.distributed import DistributedSampler
@@ -74,6 +74,32 @@ def load_and_process_df(metadata_csv_path: str, clinical_csv_path: str) -> pd.Da
     df["new_path"] = df["anon_dicom_path"].apply(lambda x: get_local_path(x, DICOM_BASE_OLD, DICOM_BASE_NEW))
 
     return df
+
+
+def split_by_patient_stratified(df: pd.DataFrame, patient_col='empi_anon', label_col='label', val_size=0.2, random_state=42):
+    """
+    Stratified split of patients to train and validation sets.
+    All exams/images from a single patient go to the same split.
+    
+    Returns:
+        train_df, val_df
+    """
+    # get one label per patient (first exam)
+    patient_labels = df.groupby(patient_col)[label_col].first().reset_index()
+
+    # stratified split of patients
+    train_patients, val_patients = train_test_split(
+        patient_labels[patient_col],
+        test_size=val_size,
+        stratify=patient_labels[label_col],
+        random_state=random_state
+    )
+
+    train_df = df[df[patient_col].isin(train_patients)].reset_index(drop=True)
+    val_df = df[df[patient_col].isin(val_patients)].reset_index(drop=True)
+
+    return train_df, val_df
+
 
 def get_pixels_no_voi(ds, apply_voi=True, lut_index=0):
     """
