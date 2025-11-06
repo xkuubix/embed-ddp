@@ -12,8 +12,7 @@ Submit:
 sbatch pytorch-ddp.sh
 ```
 ## TODO List
-- Add config file: configs/config.yaml.
-- Implement data split: use cohort 1 for training+validation, cohort 2 as test.
-- Add modulo-batch validation logic to training loop.
+- Add config file.
+
 
 
