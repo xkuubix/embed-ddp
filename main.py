@@ -15,12 +15,12 @@ CLINICAL_DATA_PATH = '/users/scratch1/mg_25/EMBED/tables/EMBED_OpenData_clinical
 def main():
     logger = setup_logging()
 
-    df = load_and_process_df(META_DATA_PATH, CLINICAL_DATA_PATH)
-    if rank == 0: logger.info(f"Loaded dataframe with {len(df)} samples")
-
     is_ddp, local_rank, rank, world_size = init_distributed()
     if rank == 0: logger.info(f"DDP mode: {is_ddp} rank={rank} world_size={world_size}")
     if rank == 0: logger.info(f"Available GPUs: {torch.cuda.device_count()}")
+    
+    df = load_and_process_df(META_DATA_PATH, CLINICAL_DATA_PATH)
+    if rank == 0: logger.info(f"Loaded dataframe with {len(df)} samples")
 
     main_df = df[['new_path', 'label', 'cohort_num_x']].copy()
     del df
