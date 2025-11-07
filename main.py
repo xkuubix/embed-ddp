@@ -17,10 +17,11 @@ def main():
     logger = setup_logging()
 
     is_ddp, local_rank, rank, world_size = init_distributed()
-    reset_seed(SEED)
     if rank == 0:
         logger.info(f"DDP mode: {is_ddp} rank={rank} world_size={world_size}")
         logger.info(f"Available GPUs: {torch.cuda.device_count()}")
+    
+    reset_seed(SEED)
     df = du.load_and_process_df(META_DATA_PATH, CLINICAL_DATA_PATH)
     if rank == 0: logger.info(f"Loaded dataframe with {len(df)} samples")
 

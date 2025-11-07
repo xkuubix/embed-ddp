@@ -40,12 +40,11 @@ def seed_worker(worker_id):
 
 def train_loop(model, opt, crit, train_dl, val_dl, train_sampler, is_ddp, rank, world_size, logger, num_epochs=10):
     
-    num_val_steps = 1000
+    num_val_steps = 10
     val_interval = max(1, len(train_dl) // num_val_steps)
     
     for epoch in range(num_epochs):
         logger.info(f"Epoch {epoch+1}/{num_epochs} starting (rank={rank})")
-        model.train()
         if is_ddp and train_sampler is not None:
             train_sampler.set_epoch(epoch)
 
@@ -53,6 +52,7 @@ def train_loop(model, opt, crit, train_dl, val_dl, train_sampler, is_ddp, rank, 
         batch_count = 0
         start_t = time.time()
         for imgs, labels in train_dl:
+            model.train()
             imgs = imgs.to(next(model.parameters()).device, non_blocking=True)
             labels = labels.to(next(model.parameters()).device, non_blocking=True)
 
@@ -63,22 +63,31 @@ def train_loop(model, opt, crit, train_dl, val_dl, train_sampler, is_ddp, rank, 
             opt.step()
             running += loss.item()
             batch_count += 1
-
+            
             if batch_count % val_interval == 0:
-                res = validate(model, val_dl, is_ddp, rank, world_size)
-                if res is not None:
-                    sens, spec, prec, f1, auc_macro, auc_weighted = res
-                    if rank == 0:
-                        logger.info(
-                            f"Epoch {epoch+1} | batch {batch_count} | val sens={sens:.4f} spec={spec:.4f} "
-                            f"prec={prec:.4f} f1={f1:.4f} "
-                            f"auc_macro={auc_macro if auc_macro is not None else 'N/A'} "
-                            f"auc_weighted={auc_weighted if auc_weighted is not None else 'N/A'}"
-                        )
-        
+                res = distributed_mini_validate(model, val_dl, is_ddp, rank, world_size, max_batches=1000)
+                if rank == 0 and res is not None:
+                    sens, spec, prec, N = res
+                    logger.info(
+                        f"epoch {epoch+1} batch {batch_count} sens={sens:.3f} spec={spec:.3f} "
+                        f"prec={prec:.3f} (N+)={N['pos']:d} (N-)={N['neg']:d}"
+                    )
+
+    
         epoch_time = time.time() - start_t
         avg_loss = running / batch_count if batch_count > 0 else 0.0
         logger.info(f"Epoch {epoch+1} training finished (rank={rank}) - avg_loss={avg_loss:.4f} time={epoch_time:.1f}s")
+        res = validate(model, val_dl, is_ddp, rank, world_size)
+        if res is not None:
+            sens, spec, prec, f1, auc_macro, auc_weighted, N = res
+            if rank == 0:
+                logger.info(
+                    f"Epoch {epoch+1} | val sens={sens:.4f} spec={spec:.4f} "
+                    f"prec={prec:.4f} f1={f1:.4f} "
+                    f"auc_macro={auc_macro if auc_macro is not None else 'N/A'} "
+                    f"auc_weighted={auc_weighted if auc_weighted is not None else 'N/A'} "
+                    f"(N+)={N['pos']:d} (N-)={N['neg']:d}"
+                )
         # # save checkpoint
         # ckpt = {
         #     'epoch': epoch,
@@ -133,4 +142,44 @@ def validate(model, val_dl, is_ddp, rank, world_size):
     prec = tp / (tp + fp) if (tp + fp) > 0 else 0.0 # Precision  / Positive Predictive Value
     f1 = (2 * tp) / (2 * tp + fp + fn) if (2 * tp + fp + fn) > 0 else 0.0 # F1 Score
 
-    return sens, spec, prec, f1, auc_macro, auc_weighted
+    N = {'pos': int(sum(labels)), 'neg': int(len(labels) - sum(labels))}
+    return sens, spec, prec, f1, auc_macro, auc_weighted, N
+
+
+def distributed_mini_validate(model, val_dl, is_ddp, rank, world_size, max_batches=-1):
+    model.eval()
+    local_preds, local_labels = [], []
+    device = next(model.parameters()).device
+
+    for i, (x, y) in enumerate(val_dl):
+        if max_batches > 0 and i >= max_batches:
+            break
+        if is_ddp and (i % world_size != rank):
+            continue
+        x = x.to(device, non_blocking=True)
+        y = y.to(device, non_blocking=True)
+        out = model(x)
+        p = (torch.sigmoid(out) >= 0.5).long()
+        local_preds.extend(p.cpu().tolist())
+        local_labels.extend(y.cpu().tolist())
+
+    if is_ddp:
+        gathered_preds = gather_from_ranks(local_preds, is_ddp, world_size)
+        gathered_labels = gather_from_ranks(local_labels, is_ddp, world_size)
+    else:
+        gathered_preds = [local_preds]
+        gathered_labels = [local_labels]
+
+    if rank == 0:
+        preds_flat = [p for sub in gathered_preds for p in (sub if isinstance(sub, list) else list(sub))]
+        labels_flat = [l for sub in gathered_labels for l in (sub if isinstance(sub, list) else list(sub))]
+        if len(labels_flat) < 1 or len(set(labels_flat)) < 2:
+            return 0.0, 0.0, 0.0, {'pos': 0, 'neg': 0}
+        tn, fp, fn, tp = confusion_matrix(labels_flat, preds_flat, labels=[0, 1]).ravel()
+        sens = tp / (tp + fn) if (tp + fn) else 0.0
+        spec = tn / (tn + fp) if (tn + fp) else 0.0
+        prec = tp / (tp + fp) if (tp + fp) else 0.0
+        N = {'pos': int(sum(labels_flat)), 'neg': int(len(labels_flat) - sum(labels_flat))}
+        return sens, spec, prec, N
+    else:
+        return None
