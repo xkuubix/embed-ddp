@@ -44,7 +44,8 @@ def train_loop(model, opt, crit, train_dl, val_dl, train_sampler, is_ddp, rank, 
     val_interval = max(1, len(train_dl) // num_val_steps)
     
     for epoch in range(num_epochs):
-        logger.info(f"Epoch {epoch+1}/{num_epochs} starting (rank={rank})")
+        if rank == 0:
+            logger.info(f"Epoch {epoch+1}/{num_epochs} started")
         if is_ddp and train_sampler is not None:
             train_sampler.set_epoch(epoch)
 
