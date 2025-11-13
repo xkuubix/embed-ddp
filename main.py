@@ -69,7 +69,11 @@ def main():
     }
 
     train_dl, val_dl, train_sampler = du.create_dataloaders(
-        train_files, val_files, transform, is_ddp, rank, world_size, SEED)
+        train_files, val_files, transform, is_ddp, rank, world_size,
+        num_workers=2,
+        per_gpu_batch=6,
+        seed=SEED
+        )
 
     device = torch.device(f"cuda:{local_rank}" if torch.cuda.is_available() else "cpu")
 
