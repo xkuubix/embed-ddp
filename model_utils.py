@@ -11,7 +11,7 @@ def deactivate_batchnorm(model):
 
 def build_model(device, is_ddp, rank, local_rank, use_pretrained=True):
     """
-    Builds ResNet50, handling pretrained-state broadcasting for DDP to avoid duplicated downloads.
+    Builds model, handling pretrained-state broadcasting for DDP to avoid duplicated downloads.
     """
     if is_ddp and use_pretrained:
         if rank == 0:
