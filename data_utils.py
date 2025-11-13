@@ -8,6 +8,7 @@ import torch.distributed as dist
 from torch.utils.data.distributed import DistributedSampler
 from torch.utils.data import DataLoader, Subset
 from torch.utils.data import WeightedRandomSampler
+import torch.nn.functional as F
 from utils import seed_worker
 
 def load_and_process_df(metadata_csv_path: str, clinical_csv_path: str) -> pd.DataFrame:
@@ -186,6 +187,27 @@ def load_dicom_as_image(dicom_path):
     arr /= (arr.max() + 1e-8)
     return arr
 
+
+def crop_to_breast(img, threshold=0.05):
+    mask = (img.mean(0) > threshold)
+    coords = mask.nonzero(as_tuple=False)
+    if len(coords) == 0:
+        return img
+    y_min, x_min = coords.min(0).values
+    y_max, x_max = coords.max(0).values
+    return img[:, y_min:y_max+1, x_min:x_max+1]
+
+
+def pad_to_square(img):
+    _, h, w = img.shape
+    if h == w:
+        return img
+    size = max(h, w)
+    pad_h = (size - h) // 2
+    pad_w = (size - w) // 2
+    return F.pad(img, (pad_w, pad_w, pad_h, pad_h), value=0.0)
+
+
 def preprocess_tensor(img: torch.Tensor):
     """
     Resize and normalize a float tensor in tensor-space.
@@ -214,6 +236,9 @@ def preprocess_tensor(img: torch.Tensor):
     maxs = img.view(c, -1).max(dim=1)[0].view(c,1,1)
     img = (img - mins) / (maxs - mins + 1e-8)
 
+    img = crop_to_breast(img, threshold=0.05)
+    img = pad_to_square(img)
+    img = F.interpolate(img.unsqueeze(0), size=(1024, 1024), mode="bilinear", align_corners=False)[0]
     return img
 
 class BreastDataset(Dataset):
