@@ -10,6 +10,7 @@ from torch.utils.data import DataLoader, Subset
 from torch.utils.data import WeightedRandomSampler
 import torch.nn.functional as F
 from utils import seed_worker
+import cv2
 
 def load_and_process_df(metadata_csv_path: str, clinical_csv_path: str) -> pd.DataFrame:
     table = pd.read_csv(metadata_csv_path, low_memory=False)
@@ -208,6 +209,34 @@ def pad_to_square(img):
     return F.pad(img, (pad_w, pad_w, pad_h, pad_h), value=0.0)
 
 
+def crop_to_breast_v2(img, threshold=0.05):
+    # img: [C,H,W] or [H,W]
+    if img.dim() == 3:
+        gray = img.mean(0)
+    else:
+        gray = img
+    
+    # binary mask
+    mask = gray > threshold
+    
+    # remove tiny objects by keeping largest connected component
+    mask_np = mask.cpu().numpy().astype('uint8')
+    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(mask_np)
+    if num_labels <= 1:  # no objects
+        return img
+    largest_idx = stats[1:, cv2.CC_STAT_AREA].argmax() + 1  # +1 because 0 is background
+    largest_mask = (labels == largest_idx)
+    
+    largest_mask = torch.tensor(largest_mask, dtype=torch.uint8)  # if it's numpy
+    coords = largest_mask.nonzero(as_tuple=False)
+    mins = coords.min(0)[0]
+    maxs = coords.max(0)[0]
+    y_min, x_min = mins[0].item(), mins[1].item()
+    y_max, x_max = maxs[0].item(), maxs[1].item()
+    
+    return img[:, y_min:y_max+1, x_min:x_max+1]
+
+
 def preprocess_tensor(img: torch.Tensor):
     """
     Resize and normalize a float tensor in tensor-space.
@@ -236,9 +265,9 @@ def preprocess_tensor(img: torch.Tensor):
     maxs = img.view(c, -1).max(dim=1)[0].view(c,1,1)
     img = (img - mins) / (maxs - mins + 1e-8)
 
-    img = crop_to_breast(img, threshold=0.05)
-    img = pad_to_square(img)
-    img = F.interpolate(img.unsqueeze(0), size=(1024, 1024), mode="bilinear", align_corners=False)[0]
+    img = crop_to_breast_v2(img, threshold=0.05)
+    # img = pad_to_square(img)
+    img = F.interpolate(img.unsqueeze(0), size=(2048, 1024), mode="bilinear", align_corners=False)[0]
     return img
 
 class BreastDataset(Dataset):
