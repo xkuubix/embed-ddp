@@ -6,7 +6,6 @@ from model_utils import build_model
 from ddp_utils import init_distributed, cleanup_distributed
 import data_utils as du
 from torchvision.transforms import v2
-from torchvision.transforms.functional import InterpolationMode
 
 META_DATA_PATH = '/users/scratch1/mg_25/EMBED/tables/EMBED_OpenData_metadata.csv'
 CLINICAL_DATA_PATH = '/users/scratch1/mg_25/EMBED/tables/EMBED_OpenData_clinical.csv'
@@ -18,7 +17,7 @@ def main():
 
     is_ddp, local_rank, rank, world_size = init_distributed()
     if rank == 0:
-        logger.info(f"DDP mode: {is_ddp} rank={rank} world_size={world_size}")
+        logger.info(f"DDP mode: {is_ddp} rank={rank} local rank={local_rank} world_size={world_size}")
         logger.info(f"Available GPUs: {torch.cuda.device_count()}")
     
     reset_seed(SEED)
@@ -44,14 +43,14 @@ def main():
     aug = v2.Compose([
         v2.RandomHorizontalFlip(p=0.5),
         v2.RandomVerticalFlip(p=0.5),
-        v2.RandomAffine(
-            degrees=10,
-            translate=(0.05, 0.05),
-            scale=(0.95, 1.05),
-            shear=5,
-            interpolation=InterpolationMode.BILINEAR,
-            fill=0
-        )
+        # v2.RandomAffine(
+        #     degrees=10,
+        #     translate=(0.05, 0.05),
+        #     scale=(0.95, 1.05),
+        #     shear=5,
+        #     interpolation=InterpolationMode.BILINEAR,
+        #     fill=0
+        # )
     ])
 
     def transforms_train(img):
