@@ -27,33 +27,27 @@ def load_and_process_df(metadata_csv_path: str, clinical_csv_path: str) -> pd.Da
     clin_B = clinical_table[clinical_table['side'].isin(['B', None])]
 
     # left breast
-    merged_L = pd.merge(
-    clin_L, table,
-    left_on=['empi_anon','acc_anon'], right_on=['empi_anon','acc_anon']
-    )
+    merged_L = pd.merge(clin_L, table, on=['empi_anon','acc_anon'])
     merged_L = merged_L[merged_L['ImageLateralityFinal']=='L']
 
     # right breast
-    merged_R = pd.merge(
-    clin_R, table,
-    left_on=['empi_anon','acc_anon'], right_on=['empi_anon','acc_anon']
-    )
+    merged_R = pd.merge(clin_R, table, on=['empi_anon','acc_anon'])
     merged_R = merged_R[merged_R['ImageLateralityFinal']=='R']
 
     # both/NaN
-    merged_B = pd.merge(
-    clin_B, table,
-    left_on=['empi_anon','acc_anon'], right_on=['empi_anon','acc_anon']
-    )
+    merged_B = pd.merge(clin_B, table, on=['empi_anon','acc_anon'])
     merged_all = pd.concat([merged_L, merged_R, merged_B], ignore_index=True)
 
     # normalize values (uppercase, strip) and show original counts
-    merged_all['asses_norm'] = merged_all['asses'].astype(str).str.strip().str.upper()
-    print("Original counts:\n", merged_all['asses_norm'].value_counts(dropna=False))
+    # merged_all['asses_norm'] = merged_all['asses'].astype(str).str.strip().str.upper()
+    asses_norm = merged_all['asses'].astype(str).str.strip().str.upper()
+    print("Original counts:\n", asses_norm.value_counts(dropna=False))
 
     # keep only letters we want to map (drop A -> 0 and P -> 3)
+
     keep_letters = {'N','B','S','M','K'}   # N=1, B=2, S=4, M=5, K=6
-    df = merged_all[merged_all['asses_norm'].isin(keep_letters)].copy()
+    mask_keep = asses_norm.isin(keep_letters)
+    asses_norm = asses_norm[mask_keep]
 
     # mapping to new labels
     map_letters_to_label = {
@@ -64,21 +58,25 @@ def load_and_process_df(metadata_csv_path: str, clinical_csv_path: str) -> pd.Da
     'K': 'suspicious', # BIRADS 6
     }
 
-    df['label'] = df['asses_norm'].map(map_letters_to_label)
-
-    # quick sanity counts
-    print("\nKept counts by letter:\n", df['asses_norm'].value_counts())
-    print("\nMapped counts by new label:\n", df['label'].value_counts())
+    label = asses_norm.map(map_letters_to_label)
 
     DICOM_BASE_OLD = "/mnt/NAS2/mammo/anon_dicom/"
     DICOM_BASE_NEW = "/users/scratch1/mg_25/EMBED/images/"
 
     # make new path
-    def get_local_path(original_path: str, old_base: str, new_base: str) -> str:
-        return original_path.replace(old_base, new_base, 1)
+    new_path = merged_all.loc[mask_keep, "anon_dicom_path"].str.replace(
+        DICOM_BASE_OLD, DICOM_BASE_NEW, n=1
+    )
+    add = pd.DataFrame({
+        'asses_norm': asses_norm,
+        'label': label,
+        'new_path': new_path,
+    })
 
-    df["new_path"] = df["anon_dicom_path"].apply(lambda x: get_local_path(x, DICOM_BASE_OLD, DICOM_BASE_NEW))
-
+    df = pd.concat([merged_all.loc[mask_keep].reset_index(drop=True),
+                    add.reset_index(drop=True)], axis=1)
+    print("Kept counts by letter:\n", df['asses_norm'].value_counts())
+    print("\nMapped counts by new label:\n", df['label'].value_counts())
     return df
 
 
