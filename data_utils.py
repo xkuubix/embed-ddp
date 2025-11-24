@@ -408,4 +408,4 @@ def balance_indices(labels, mode='over'):
         idx = np.arange(len(labels)).tolist()
 
     np.random.shuffle(idx)
-    return idx.tolist()
+    return idx
