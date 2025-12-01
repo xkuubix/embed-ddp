@@ -5,6 +5,7 @@ import time
 from ddp_utils import gather_from_ranks
 import random
 import numpy as np
+from model_utils import ModelEMA
 
 
 def setup_logging():
@@ -38,55 +39,78 @@ def seed_worker(worker_id):
     random.seed(worker_seed)
 
 
-def train_loop(model, opt, crit, train_dl, val_dl, train_sampler, is_ddp, rank, world_size, logger, num_epochs=10):
+def train_loop(model, opt, crit, train_dl, val_dl, train_sampler, is_ddp, rank, world_size, logger, num_epochs=10, accumulation_steps=64):
     
     num_val_steps = 10
     val_interval = max(1, len(train_dl) // num_val_steps)
-    
+    use_ddp_no_sync = is_ddp and hasattr(model, "no_sync")
+
+    ema = ModelEMA(model, decay=0.9998)
     for epoch in range(num_epochs):
         if rank == 0:
-            logger.info(f"Epoch {epoch+1}/{num_epochs} started")
+            logger.info(f"Epoch {epoch+1}/{num_epochs} started (accum_steps={accumulation_steps})")
         if is_ddp and train_sampler is not None:
             train_sampler.set_epoch(epoch)
 
         running = 0.0
-        batch_count = 0
+        batch_count = 0  # number of microbatches processed
         start_t = time.time()
+        accum_counter = 0  # counts microbatches accumulated so far
+
         for imgs, labels in train_dl:
             model.train()
             imgs = imgs.to(next(model.parameters()).device, non_blocking=True)
             labels = labels.to(next(model.parameters()).device, non_blocking=True)
 
-            opt.zero_grad()
-            outputs = model(imgs)
-            loss = crit(outputs, labels)
-            loss.backward()
-            opt.step()
-            running += loss.item()
-            batch_count += 1
-            
-            if batch_count % val_interval == 0:
-                res = distributed_mini_validate(model, val_dl, is_ddp, rank, world_size, max_batches=1000)
-                if rank == 0 and res is not None:
-                    sens, spec, prec, N = res
-                    logger.info(
-                        f"epoch {epoch+1} batch {batch_count} sens={sens:.3f} spec={spec:.3f} "
-                        f"prec={prec:.3f} (N+)={N['pos']:d} (N-)={N['neg']:d}"
-                    )
+            # zero grads at start of accumulation
+            if accum_counter == 0:
+                opt.zero_grad()
 
-    
+            outputs = model(imgs)
+            epsilon = 0.2
+            y_smooth = labels * (1 - epsilon) + (1 - labels) * epsilon
+            loss = crit(outputs, y_smooth)
+            loss_value = loss.item()
+            # scale loss for gradient accumulation
+            scaled_loss = loss / float(accumulation_steps)
+            # backwards with DDP no_sync when not stepping this microbatch
+            if use_ddp_no_sync and (accum_counter != accumulation_steps - 1):
+                with model.no_sync():
+                    scaled_loss.backward()
+            else:
+                scaled_loss.backward()
+
+            running += loss_value
+            batch_count += 1
+            accum_counter += 1
+
+            # optimizer step when enough microbatches accumulated
+            if accum_counter == accumulation_steps:
+                opt.step()
+                opt.zero_grad()
+                accum_counter = 0
+                ema.update(model.module)  # model.module contains the real weights
+
+        # if there are leftover accumulated grads at epoch end, step once
+        if accum_counter != 0:
+            opt.step()
+            opt.zero_grad()
+            accum_counter = 0
+            ema.update(model.module)  # model.module contains the real weights
+
+
         epoch_time = time.time() - start_t
         avg_loss = running / batch_count if batch_count > 0 else 0.0
-        logger.info(f"Epoch {epoch+1} training finished (rank={rank}) - avg_loss={avg_loss:.4f} time={epoch_time:.1f}s")
-        res = validate(model, val_dl, is_ddp, rank, world_size)
+        if rank == 0:
+            logger.info(f"Epoch {epoch+1} training finished (rank={rank}) - L={avg_loss:.4f} time={epoch_time:.1f}s")
+        res = validate(ema.ema, val_dl, crit, is_ddp, rank, world_size)
         if res is not None:
-            sens, spec, prec, f1, auc_macro, auc_weighted, N = res
+            sens, spec, prec, f1, auc_score, val_avg_loss, N = res
             if rank == 0:
                 logger.info(
-                    f"Epoch {epoch+1} | val sens={sens:.4f} spec={spec:.4f} "
+                    f"Epoch {epoch+1} | L={val_avg_loss:.4f}  val sens={sens:.4f} spec={spec:.4f} "
                     f"prec={prec:.4f} f1={f1:.4f} "
-                    f"auc_macro={auc_macro if auc_macro is not None else 'N/A'} "
-                    f"auc_weighted={auc_weighted if auc_weighted is not None else 'N/A'} "
+                    f"auc={auc_score if auc_score is not None else 'N/A'} "
                     f"(N+)={N['pos']:d} (N-)={N['neg']:d}"
                 )
         # # save checkpoint
