@@ -122,25 +122,28 @@ def train_loop(model, opt, crit, train_dl, val_dl, train_sampler, is_ddp, rank, 
         # torch.save(ckpt, f'./checkpoints/best_epoch_{epoch+1}.pth')
 
 
-def validate(model, val_dl, is_ddp, rank, world_size):
+def validate(model, val_dl, crit, is_ddp, rank, world_size):
     model.eval()
-    local_preds, local_probs, local_labels = [], [], []
+    local_preds, local_probs, local_labels, local_losses = [], [], [], []
 
     with torch.no_grad():
         for imgs, labels in val_dl:
             imgs = imgs.to(next(model.parameters()).device, non_blocking=True)
-            labels = labels.to(next(model.parameters()).device, non_blocking=True)
+            labels = labels.to(next(model.parameters()).device, non_blocking=True).view(-1)
             outputs = model(imgs)
-            probs = torch.sigmoid(outputs)
-            preds = (probs >= 0.5).long()
+            loss = crit(outputs.view(-1), labels)
+            probs = torch.sigmoid(outputs).view(-1)
+            preds = (probs >= 0.5).long().view(-1)
             local_preds.extend(preds.cpu().tolist())
             local_probs.extend(probs.cpu().tolist())
             local_labels.extend(labels.cpu().tolist())
+            local_losses.extend([loss.item()] * len(labels))
 
     # gather across ranks
     gathered_probs = gather_from_ranks(local_probs, is_ddp, world_size)
     gathered_labels = gather_from_ranks(local_labels, is_ddp, world_size)
     gathered_preds = gather_from_ranks(local_preds, is_ddp, world_size)
+    gathered_losses = gather_from_ranks(local_losses, is_ddp, world_size)
 
     if rank != 0:
         return None
@@ -149,14 +152,13 @@ def validate(model, val_dl, is_ddp, rank, world_size):
     probs = [p for sub in gathered_probs for p in (sub if isinstance(sub, list) else list(sub))]
     labels = [l for sub in gathered_labels for l in (sub if isinstance(sub, list) else list(sub))]
     preds  = [p for sub in gathered_preds for p in (sub if isinstance(sub, list) else list(sub))]
-
-    auc_macro = None
+    losses = [l for sub in gathered_losses for l in (sub if isinstance(sub, list) else list(sub))]
+    avg_loss = sum(losses) / len(losses) if losses else 0.0
+    auc_score = None
     try:
-        auc_macro = roc_auc_score(labels, probs) if len(set(labels)) > 1 else float('nan')
-        auc_weighted = roc_auc_score(labels, probs, average='weighted') if len(set(labels)) > 1 else float('nan')
+        auc_score = roc_auc_score(labels, probs) if len(set(labels)) > 1 else float('nan')
     except Exception:
-        auc_macro = float('nan')
-
+        auc_score = float('nan')
     if len(labels) > 0 and len(set(labels)) > 1:
         tn, fp, fn, tp = confusion_matrix(labels, preds, labels=[0,1]).ravel()
     else:
@@ -168,7 +170,7 @@ def validate(model, val_dl, is_ddp, rank, world_size):
     f1 = (2 * tp) / (2 * tp + fp + fn) if (2 * tp + fp + fn) > 0 else 0.0 # F1 Score
 
     N = {'pos': int(sum(labels)), 'neg': int(len(labels) - sum(labels))}
-    return sens, spec, prec, f1, auc_macro, auc_weighted, N
+    return sens, spec, prec, f1, auc_score, avg_loss, N
 
 
 def distributed_mini_validate(model, val_dl, is_ddp, rank, world_size, max_batches=-1):
