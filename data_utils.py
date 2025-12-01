@@ -361,8 +361,8 @@ def create_dataloaders(train_files, val_files, transform, is_ddp, rank, world_si
         all_idx = all_idx.tolist()
     train_subset = Subset(train_ds, all_idx)
 
-    train_sampler = DistributedSampler(train_subset, num_replicas=world_size, rank=rank, shuffle=True)
-    val_sampler = DistributedSampler(val_ds, num_replicas=world_size, rank=rank, shuffle=False)
+    train_sampler = DistributedSampler(train_subset, num_replicas=world_size, rank=rank, shuffle=True, drop_last=True)
+    val_sampler = DistributedSampler(val_ds, num_replicas=world_size, rank=rank, shuffle=False, drop_last=False)
 
     g = torch.Generator()
     g.manual_seed(42)
