@@ -89,7 +89,8 @@ def main():
         is_ddp,
         rank,
         local_rank,
-        use_pretrained=True
+        use_pretrained=True,
+        backbone='convnext_small'
         )
 
     opt = torch.optim.AdamW(model.parameters(), lr=1e-4)
