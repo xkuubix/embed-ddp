@@ -4,6 +4,8 @@ from torch import nn
 from utils import setup_logging, format_counts, reset_seed, train_loop
 from model_utils import build_model
 from ddp_utils import init_distributed, cleanup_distributed
+import albumentations as A
+import torch.nn.functional as F
 import data_utils as du
 from torchvision.transforms import v2
 
@@ -11,7 +13,6 @@ META_DATA_PATH = '/users/scratch1/mg_25/EMBED/tables/EMBED_OpenData_metadata.csv
 CLINICAL_DATA_PATH = '/users/scratch1/mg_25/EMBED/tables/EMBED_OpenData_clinical.csv'
 
 SEED = 42
-
 def main():
     logger = setup_logging()
 
@@ -40,21 +41,28 @@ def main():
         logger.info(format_counts(val_files, "Val"))
         logger.info(format_counts(test_df, "Test"))
 
-    aug = v2.Compose([
-        v2.RandomHorizontalFlip(p=0.5),
-        v2.RandomVerticalFlip(p=0.5),
-        # v2.RandomAffine(
-        #     degrees=10,
-        #     translate=(0.05, 0.05),
-        #     scale=(0.95, 1.05),
-        #     shear=5,
-        #     interpolation=InterpolationMode.BILINEAR,
-        #     fill=0
-        # )
-    ])
+    aug_prior = A.Compose([
+        A.HorizontalFlip(p=0.5), A.VerticalFlip(p=0.5),
+        A.Downscale(scale_range=(0.75, 0.95), p=0.125),
+        A.OneOf([
+            A.RandomToneCurve(scale=0.3, p=0.5),
+            A.RandomBrightnessContrast(brightness_limit=(-0.1, 0.2),
+                                       contrast_limit=(-0.4, 0.5),
+                                       brightness_by_max=True, p=0.5)
+        ], p=0.5),
+        A.OneOf([
+            A.Affine(translate_percent={'x': (-0.1, 0.1), 'y': (-0.2, 0.2)},
+                     scale=(0.85, 1.15), rotate=(-30, 30), p=0.6),
+            A.ElasticTransform(alpha=1, sigma=20, p=0.2),
+            A.GridDistortion(num_steps=5, distort_limit=0.3, p=0.2)
+        ], p=0.5),
+        A.CoarseDropout(num_holes_range=(1, 6),
+                        hole_height_range=(0.05, 0.15),
+                        hole_width_range=(0.1, 0.25), p=0.25),
+    ], p=0.9)
 
     def transforms_train(img):
-        img = aug(img)
+        img = aug_prior(image=img)['image']
         img = du.preprocess_tensor(img)
         return img
 

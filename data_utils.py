@@ -289,10 +289,17 @@ class BreastDataset(Dataset):
         y = label_map[y_text]
         dicom = load_dicom_as_image(path)
         # im=(im-IM_MEAN)/IM_STD
-        dicom = torch.from_numpy(dicom).repeat(3,1,1)
+
         if self.transform:
+            if dicom.ndim == 2:
+                dicom = np.stack([dicom]*3, axis=-1)  # (H, W) -> (H, W, 3)
             dicom = self.transform(dicom)
-        return dicom, torch.tensor(y,dtype=torch.float32)
+        else:
+            if dicom.ndim == 2:
+                dicom = np.stack([dicom]*3, axis=0)
+            dicom = torch.from_numpy(dicom).float()
+
+        return dicom, torch.tensor(y,dtype=torch.float32).unsqueeze(0)
     
 
 def create_dataloaders(train_files, val_files, transform, is_ddp, rank, world_size, num_workers=12, per_gpu_batch=1, seed=42):
