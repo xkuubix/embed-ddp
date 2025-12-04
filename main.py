@@ -93,7 +93,8 @@ def main():
         backbone='convnext_small'
         )
 
-    opt = torch.optim.AdamW(model.parameters(), lr=1e-4)
+    opt = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-4)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=10, eta_min=1e-6)
     crit = nn.BCEWithLogitsLoss().to(device)
 
     os.makedirs('./checkpoints', exist_ok=True)
@@ -101,6 +102,7 @@ def main():
     train_loop(
         model,
         opt,
+        scheduler,
         crit,
         train_dl,
         val_dl,

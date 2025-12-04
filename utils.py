@@ -39,7 +39,7 @@ def seed_worker(worker_id):
     random.seed(worker_seed)
 
 
-def train_loop(model, opt, crit, train_dl, val_dl, train_sampler, is_ddp, rank, world_size, logger, num_epochs=10, accumulation_steps=64):
+def train_loop(model, opt, scheduler, crit, train_dl, val_dl, train_sampler, is_ddp, rank, world_size, logger, num_epochs=10, accumulation_steps=32):
     
     num_val_steps = 10
     val_interval = max(1, len(train_dl) // num_val_steps)
@@ -113,6 +113,7 @@ def train_loop(model, opt, crit, train_dl, val_dl, train_sampler, is_ddp, rank, 
                     f"auc={auc_score if auc_score is not None else 'N/A'} "
                     f"(N+)={N['pos']:d} (N-)={N['neg']:d}"
                 )
+        scheduler.step()
         # # save checkpoint
         # ckpt = {
         #     'epoch': epoch,
