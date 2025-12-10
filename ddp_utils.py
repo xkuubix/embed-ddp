@@ -10,6 +10,7 @@ def init_distributed():
         rank = int(os.environ.get("RANK", "0"))
         world_size = int(os.environ.get("WORLD_SIZE", "1"))
         torch.cuda.set_device(local_rank)
+        print(f"Initializing distributed: rank {rank}, local_rank {local_rank}, world_size {world_size}")
         dist.init_process_group(backend="nccl", init_method="env://")
     else:
         local_rank, rank, world_size = 0, 0, 1
