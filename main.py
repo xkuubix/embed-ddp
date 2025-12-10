@@ -17,15 +17,25 @@ CLINICAL_DATA_PATH = f'{prefix}EMBED_OpenData_NUS_Datathon_clinical_reduced.csv'
 
 def main():
     logger = setup_logging()
-
+    logger.info("Starting main training script")
     is_ddp, local_rank, rank, world_size = init_distributed()
     if rank == 0:
         logger.info(f"DDP mode: {is_ddp} rank={rank} local rank={local_rank} world_size={world_size}")
         logger.info(f"Available GPUs: {torch.cuda.device_count()}")
+        
+        # Log SLURM info if available
+        if 'SLURM_JOB_ID' in os.environ:
+            logger.info(f"SLURM Job ID: {os.environ['SLURM_JOB_ID']}")
+            logger.info(f"SLURM Nodes: {os.environ.get('SLURM_JOB_NODELIST', 'N/A')}")
+            logger.info(f"Master Address: {os.environ.get('MASTER_ADDR', 'N/A')}")
+            logger.info(f"Master Port: {os.environ.get('MASTER_PORT', 'N/A')}")
+    
+    # Log which node this process is on
+    hostname = os.environ.get('HOSTNAME', 'unknown')
+    logger.info(f"[Rank {rank}] Running on node: {hostname}")
     
     reset_seed(SEED)
-    df = du.load_and_process_df(META_DATA_PATH, CLINICAL_DATA_PATH)
-    df['target'] = df['label'].map({0: 'negative', 1: 'suspicious'})
+    df = du.load_and_process_df(META_DATA_PATH, CLINICAL_DATA_PATH, rank)
     
     if rank == 0: logger.info(f"Loaded dataframe with {len(df)} samples")
 

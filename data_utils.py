@@ -13,7 +13,7 @@ from utils import seed_worker
 import cv2
 
 
-def load_and_process_df(metadata_csv_path: str, clinical_csv_path: str) -> pd.DataFrame:
+def load_and_process_df(metadata_csv_path: str, clinical_csv_path: str, rank: int) -> pd.DataFrame:
     """
     Load and process metadata and clinical data with improved filtering logic
     
@@ -26,36 +26,39 @@ def load_and_process_df(metadata_csv_path: str, clinical_csv_path: str) -> pd.Da
     """
     # ===== Load and filter metadata =====
     table = pd.read_csv(metadata_csv_path, low_memory=False)
-    
-    print(f"Original metadata rows: {len(table)}")
+    if rank == 0:
+        print(f"Original metadata rows: {len(table)}")
     
     # Apply filters
     table = table[table['FinalImageType'] == '2D']
     table = table[table['ViewPosition'].isin(['MLO', 'CC'])]
     
-    print(f"Filtered metadata (2D, MLO/CC views): {len(table)}")
+    if rank == 0:
+        print(f"After FinalImageType and ViewPosition filtering: {len(table)}")
     
     # ===== Load and filter clinical data =====
     clinical_table = pd.read_csv(clinical_csv_path, low_memory=False)
     
-    print(f"\nOriginal clinical rows: {len(clinical_table)}")
+    if rank == 0:
+        print(f"\nOriginal clinical rows: {len(clinical_table)}")
     
     # Clean and filter BIRADS assessments
     if 'exam_birads' in clinical_table.columns:
         clinical_table['asses_clean'] = clinical_table['exam_birads'].astype(str).str.strip().str.upper()
     else:
         clinical_table['asses_clean'] = clinical_table['asses'].astype(str).str.strip().str.upper()
-    
-    print("\nOriginal BIRADS distribution:")
-    print(clinical_table['asses_clean'].value_counts(dropna=False))
+    if rank == 0:
+        print("\nOriginal BIRADS distribution:")
+        print(clinical_table['asses_clean'].value_counts(dropna=False))
     
     # Filter to keep only desired BIRADS categories
     keep_letters = {'N', 'B', 'S', 'M', 'K'}  # N=1, B=2, S=4, M=5, K=6
     clinical_filtered = clinical_table[clinical_table['asses_clean'].isin(keep_letters)].copy()
     
-    print(f"\nAfter BIRADS filtering: {len(clinical_filtered)}")
-    print("Kept BIRADS distribution:")
-    print(clinical_filtered['asses_clean'].value_counts())
+    if rank == 0:
+        print(f"\nAfter BIRADS filtering: {len(clinical_filtered)}")
+        print("Kept BIRADS distribution:")
+        print(clinical_filtered['asses_clean'].value_counts())
     
     # Map BIRADS to binary target and label
     birads_to_target = {'N': 0, 'B': 0, 'S': 1, 'M': 1, 'K': 1}
@@ -69,10 +72,10 @@ def load_and_process_df(metadata_csv_path: str, clinical_csv_path: str) -> pd.Da
     
     clinical_filtered['target'] = clinical_filtered['asses_clean'].map(birads_to_target)
     clinical_filtered['label'] = clinical_filtered['asses_clean'].map(birads_to_label)
-    
-    print(f"\nTarget distribution in clinical data:")
-    print(f"Negative (0): {(clinical_filtered['target'] == 0).sum()}")
-    print(f"Positive (1): {(clinical_filtered['target'] == 1).sum()}")
+    if rank == 0:
+        print(f"\nTarget distribution in clinical data:")
+        print(f"Negative (0): {(clinical_filtered['target'] == 0).sum()}")
+        print(f"Positive (1): {(clinical_filtered['target'] == 1).sum()}")
     
     clinical_filtered = clinical_filtered.drop_duplicates(
     subset=['empi_anon','acc_anon','side'], keep='first')
@@ -83,11 +86,12 @@ def load_and_process_df(metadata_csv_path: str, clinical_csv_path: str) -> pd.Da
     clin_B = clinical_filtered[clinical_filtered['side'] == 'B'].copy()
     clin_NaN = clinical_filtered[clinical_filtered['side'].isna()].copy()
     
-    print(f"\nClinical data by side:")
-    print(f"  L: {len(clin_L)}")
-    print(f"  R: {len(clin_R)}")
-    print(f"  B: {len(clin_B)}")
-    print(f"  NaN: {len(clin_NaN)}")
+    if rank == 0:
+        print(f"\nClinical data by side:")
+        print(f"  L: {len(clin_L)}")
+        print(f"  R: {len(clin_R)}")
+        print(f"  B: {len(clin_B)}")
+        print(f"  NaN: {len(clin_NaN)}")
     
     # ===== Merge metadata with clinical data by laterality =====
     # Side L: match only with ImageLateralityFinal == 'L'
@@ -122,40 +126,42 @@ def load_and_process_df(metadata_csv_path: str, clinical_csv_path: str) -> pd.Da
         how='inner'
     )
     
-    print(f"\nMerge results by side:")
-    print(f"  L: {len(merged_L)} images")
-    print(f"  R: {len(merged_R)} images")
-    print(f"  B: {len(merged_B)} images")
-    print(f"  NaN: {len(merged_NaN)} images")
+    if rank == 0:
+        print(f"\nMerge results by side:")
+        print(f"  L: {len(merged_L)} images")
+        print(f"  R: {len(merged_R)} images")
+        print(f"  B: {len(merged_B)} images")
+        print(f"  NaN: {len(merged_NaN)} images")
     
     # Combine all merged data
     merged_all = pd.concat([merged_L, merged_R, merged_B, merged_NaN], 
                            ignore_index=True)
     
-    print(f"\n{'='*60}")
-    print(f"FINAL DATASET SUMMARY")
-    print(f"{'='*60}")
-    print(f"Total images: {len(merged_all)}")
-    print(f"Unique patients: {merged_all['empi_anon'].nunique()}")
-    print(f"Unique accessions: {merged_all['acc_anon'].nunique()}")
-    
-    print(f"\nTarget distribution:")
-    print(f"  Negative (0): {(merged_all['target'] == 0).sum()} ({(merged_all['target'] == 0).mean():.1%})")
-    print(f"  Positive (1): {(merged_all['target'] == 1).sum()} ({(merged_all['target'] == 1).mean():.1%})")
-    
-    print(f"\nLabel distribution:")
-    print(merged_all['label'].value_counts())
-    
-    print(f"\nBIRADS distribution:")
-    print(merged_all['asses_clean'].value_counts())
-    
-    print(f"\nView distribution:")
-    if 'ViewPosition' in merged_all.columns:
-        print(merged_all['ViewPosition'].value_counts())
-    
-    print(f"\nLaterality distribution:")
-    if 'ImageLateralityFinal' in merged_all.columns:
-        print(merged_all['ImageLateralityFinal'].value_counts())
+    if rank == 0:
+        print(f"\n{'='*60}")
+        print(f"FINAL DATASET SUMMARY")
+        print(f"{'='*60}")
+        print(f"Total images: {len(merged_all)}")
+        print(f"Unique patients: {merged_all['empi_anon'].nunique()}")
+        print(f"Unique accessions: {merged_all['acc_anon'].nunique()}")
+        
+        print(f"\nTarget distribution:")
+        print(f"  Negative (0): {(merged_all['target'] == 0).sum()} ({(merged_all['target'] == 0).mean():.1%})")
+        print(f"  Positive (1): {(merged_all['target'] == 1).sum()} ({(merged_all['target'] == 1).mean():.1%})")
+        
+        print(f"\nLabel distribution:")
+        print(merged_all['label'].value_counts())
+        
+        print(f"\nBIRADS distribution:")
+        print(merged_all['asses_clean'].value_counts())
+        
+        print(f"\nView distribution:")
+        if 'ViewPosition' in merged_all.columns:
+            print(merged_all['ViewPosition'].value_counts())
+        
+        print(f"\nLaterality distribution:")
+        if 'ImageLateralityFinal' in merged_all.columns:
+            print(merged_all['ImageLateralityFinal'].value_counts())
     
     # ===== Update file paths (if needed) =====
     if 'anon_dicom_path' in merged_all.columns:
@@ -166,14 +172,18 @@ def load_and_process_df(metadata_csv_path: str, clinical_csv_path: str) -> pd.Da
         merged_all['new_path'] = merged_all['anon_dicom_path'].str.replace(
             DICOM_BASE_OLD, DICOM_BASE_NEW, n=1, regex=False
         )
-        print(f"\nPath mapping completed")
+        if rank == 0:
+            print(f"\nUpdated DICOM paths to new base directory.")
     
-    print(f"{'='*60}\n")
+    if rank == 0:
+        print(f"{'='*60}\n")
     dup_count = merged_all.duplicated(subset=['empi_anon', 'acc_anon', 'ImageLateralityFinal', 'ViewPosition']).sum()
     if dup_count > 0:
-        print(f"Duplicate image records: {dup_count} of total ({len(merged_all)})")
+        if rank == 0:
+            print(f"Duplicate image records: {dup_count} of total ({len(merged_all)})")
         merged_all.drop_duplicates(subset=['empi_anon', 'acc_anon', 'ImageLateralityFinal', 'ViewPosition'], inplace=True)
-        print(f"Duplicates removed, new count: {len(merged_all)}")
+        if rank == 0:
+            print(f"Duplicates removed, new count: {len(merged_all)}")
     
     return merged_all
 
