@@ -5,14 +5,16 @@ from utils import setup_logging, format_counts, reset_seed, train_loop
 from model_utils import build_model
 from ddp_utils import init_distributed, cleanup_distributed
 import albumentations as A
-import torch.nn.functional as F
 import data_utils as du
-from torchvision.transforms import v2
+# %%
 
-META_DATA_PATH = '/users/scratch1/mg_25/EMBED/tables/EMBED_OpenData_metadata.csv'
-CLINICAL_DATA_PATH = '/users/scratch1/mg_25/EMBED/tables/EMBED_OpenData_clinical.csv'
 
 SEED = 42
+prefix = '/users/scratch1/mg_25/EMBED/datathon_tables/'
+META_DATA_PATH = f'{prefix}EMBED_OpenData_NUS_Datathon_metadata_reduced.csv'
+CLINICAL_DATA_PATH = f'{prefix}EMBED_OpenData_NUS_Datathon_clinical_reduced.csv'
+
+
 def main():
     logger = setup_logging()
 
@@ -23,6 +25,8 @@ def main():
     
     reset_seed(SEED)
     df = du.load_and_process_df(META_DATA_PATH, CLINICAL_DATA_PATH)
+    df['target'] = df['label'].map({0: 'negative', 1: 'suspicious'})
+    
     if rank == 0: logger.info(f"Loaded dataframe with {len(df)} samples")
 
     main_df = df[['new_path', 'label', 'cohort_num_x', 'empi_anon']].copy()
