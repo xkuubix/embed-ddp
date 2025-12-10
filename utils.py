@@ -6,6 +6,7 @@ from ddp_utils import gather_from_ranks
 import random
 import numpy as np
 from model_utils import ModelEMA
+from torch.nn.parallel import DistributedDataParallel as DDP
 
 
 def setup_logging():
@@ -58,6 +59,9 @@ def train_loop(model, opt, scheduler, crit, train_dl, val_dl, train_sampler, is_
         accum_counter = 0  # counts microbatches accumulated so far
 
         for imgs, labels in train_dl:
+            # break
+            if imgs.size(0) == 0 or imgs.numel() == 0 or imgs.shape[0] == 0:
+                continue # fallback; augmentation may produce empty batches
             model.train()
             imgs = imgs.to(next(model.parameters()).device, non_blocking=True)
             labels = labels.to(next(model.parameters()).device, non_blocking=True)
@@ -89,14 +93,19 @@ def train_loop(model, opt, scheduler, crit, train_dl, val_dl, train_sampler, is_
                 opt.step()
                 opt.zero_grad()
                 accum_counter = 0
-                ema.update(model.module)  # model.module contains the real weights
-
+                if is_ddp:
+                    ema.update(model.module)  # model.module contains the real weights
+                else:
+                    ema.update(model)
         # if there are leftover accumulated grads at epoch end, step once
         if accum_counter != 0:
             opt.step()
             opt.zero_grad()
             accum_counter = 0
-            ema.update(model.module)  # model.module contains the real weights
+            if is_ddp:
+                ema.update(model.module)  # model.module contains the real weights
+            else:
+                ema.update(model)
 
 
         epoch_time = time.time() - start_t
@@ -105,11 +114,11 @@ def train_loop(model, opt, scheduler, crit, train_dl, val_dl, train_sampler, is_
             logger.info(f"Epoch {epoch+1} training finished (rank={rank}) - L={avg_loss:.4f} time={epoch_time:.1f}s")
         res = validate(ema.ema, val_dl, crit, is_ddp, rank, world_size)
         if res is not None:
-            sens, spec, prec, f1, auc_score, val_avg_loss, N = res
+            sens, spec, prec, npv, f1, auc_score, val_avg_loss, N = res
             if rank == 0:
                 logger.info(
                     f"Epoch {epoch+1} | L={val_avg_loss:.4f}  val sens={sens:.4f} spec={spec:.4f} "
-                    f"prec={prec:.4f} f1={f1:.4f} "
+                    f"prec={prec:.4f} npv={npv:.4f} f1={f1:.4f} "
                     f"auc={auc_score if auc_score is not None else 'N/A'} "
                     f"(N+)={N['pos']:d} (N-)={N['neg']:d}"
                 )
@@ -168,8 +177,9 @@ def validate(model, val_dl, crit, is_ddp, rank, world_size):
     sens = tp / (tp + fn) if (tp + fn) > 0 else 0.0 # Sensitivity  / True Positive Rate  /  Recall
     spec = tn / (tn + fp) if (tn + fp) > 0 else 0.0 # Specificity / True Negative Rate
     prec = tp / (tp + fp) if (tp + fp) > 0 else 0.0 # Precision  / Positive Predictive Value
+    npv = tn / (tn + fn) if (tn + fn) > 0 else 0.0  # Negative Predictive Value
     f1 = (2 * tp) / (2 * tp + fp + fn) if (2 * tp + fp + fn) > 0 else 0.0 # F1 Score
 
     N = {'pos': int(sum(labels)), 'neg': int(len(labels) - sum(labels))}
-    return sens, spec, prec, f1, auc_score, avg_loss, N
+    return sens, spec, prec, npv, f1, auc_score, avg_loss, N
 
