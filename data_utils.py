@@ -83,8 +83,8 @@ def load_and_process_df(metadata_csv_path: str, clinical_csv_path: str, rank: in
     # ===== Split clinical data by laterality =====
     clin_L = clinical_filtered[clinical_filtered['side'] == 'L'].copy()
     clin_R = clinical_filtered[clinical_filtered['side'] == 'R'].copy()
-    clin_B = clinical_filtered[clinical_filtered['side'] == 'B'].copy()
-    clin_NaN = clinical_filtered[clinical_filtered['side'].isna()].copy()
+    clin_B = clinical_filtered[clinical_filtered['side'] == 'B'].copy() # empty for datathon .csv
+    clin_NaN = clinical_filtered[clinical_filtered['side'].isna()].copy() # empty for datathon .csv
     
     if rank == 0:
         print(f"\nClinical data by side:")
