@@ -5,9 +5,10 @@
 #SBATCH --ntasks-per-node=8                   # Number of CPU cores per node
 #SBATCH --mem=32000                           # Memory allocation (in MB)
 #SBATCH --time=71:59:59                       # Max execution time (hh:mm:ss)
-#SBATCH --output=/users/scratch1/username/path/outputs/%x_%j.out
+#SBATCH --output=/outputs/%x_%j.out
 
 GPU_NUMBER=4
 source /venv/bin/activate
 
-torchrun --nproc_per_node=$GPU_NUMBER /users/project1/ptxxxxx/project/main.py
+torchrun --nproc_per_node=$GPU_NUMBER main.py
+echo "Training finished with exit code: $?"
