@@ -13,179 +13,112 @@ from utils import seed_worker
 import cv2
 
 
+def aggregate_by_side_severity(group: pd.DataFrame) -> pd.Series:
+    """
+    Return the single most severe row in a group of findings for a given (patient, exam, side).
+    Screening severity (worst->least): A > B > N
+    Diagnostic severity (worst->least): K > M > S > P > B > N
+    """
+    # safe exam type detection
+    exam_desc = str(group['desc'].iloc[0]) if 'desc' in group.columns else ''
+    is_screen = 'screen' in exam_desc.lower()
+
+    if is_screen:
+        severity = {'A': 0, 'B': 1, 'N': 2}
+    else:
+        severity = {'K': 0, 'M': 1, 'S': 2, 'P': 3, 'B': 4, 'N': 5}
+
+    # map with fallback for unknowns/NaN so they don't get picked
+    sev = group['asses_clean'].map(severity).fillna(9999)
+    worst_idx = sev.idxmin() if not sev.isna().all() else group.index[0]
+    return group.loc[worst_idx]
+
+
 def load_and_process_df(metadata_csv_path: str, clinical_csv_path: str, rank: int) -> pd.DataFrame:
     """
-    Load and process metadata and clinical data with improved filtering logic
-    
-    Args:
-        metadata_csv_path: Path to image metadata CSV
-        clinical_csv_path: Path to clinical data CSV
-    
-    Returns:
-        DataFrame with merged and processed data
+    Load, aggregate finding-level clinical data to one row per side (most severe),
+    and merge strictly by laterality to avoid duplication.
     """
-    # ===== Load and filter metadata =====
     table = pd.read_csv(metadata_csv_path, low_memory=False)
     if rank == 0:
         print(f"Original metadata rows: {len(table)}")
-    
-    # Apply filters
+
     table = table[table['FinalImageType'] == '2D']
     table = table[table['ViewPosition'].isin(['MLO', 'CC'])]
-    
     if rank == 0:
-        print(f"After FinalImageType and ViewPosition filtering: {len(table)}")
-    
-    # ===== Load and filter clinical data =====
-    clinical_table = pd.read_csv(clinical_csv_path, low_memory=False)
-    
-    if rank == 0:
-        print(f"\nOriginal clinical rows: {len(clinical_table)}")
-    
-    # Clean and filter BIRADS assessments
-    if 'exam_birads' in clinical_table.columns:
-        clinical_table['asses_clean'] = clinical_table['exam_birads'].astype(str).str.strip().str.upper()
-    else:
-        clinical_table['asses_clean'] = clinical_table['asses'].astype(str).str.strip().str.upper()
-    if rank == 0:
-        print("\nOriginal BIRADS distribution:")
-        print(clinical_table['asses_clean'].value_counts(dropna=False))
-    
-    # Filter to keep only desired BIRADS categories
-    keep_letters = {'N', 'B', 'S', 'M', 'K'}  # N=1, B=2, S=4, M=5, K=6
-    clinical_filtered = clinical_table[clinical_table['asses_clean'].isin(keep_letters)].copy()
-    
-    if rank == 0:
-        print(f"\nAfter BIRADS filtering: {len(clinical_filtered)}")
-        print("Kept BIRADS distribution:")
-        print(clinical_filtered['asses_clean'].value_counts())
-    
-    # Map BIRADS to binary target and label
-    birads_to_target = {'N': 0, 'B': 0, 'S': 1, 'M': 1, 'K': 1}
-    birads_to_label = {
-        'N': 'negative',   # BIRADS 1
-        'B': 'negative',   # BIRADS 2
-        'S': 'suspicious', # BIRADS 4
-        'M': 'suspicious', # BIRADS 5
-        'K': 'suspicious', # BIRADS 6
-    }
-    
-    clinical_filtered['target'] = clinical_filtered['asses_clean'].map(birads_to_target)
-    clinical_filtered['label'] = clinical_filtered['asses_clean'].map(birads_to_label)
-    if rank == 0:
-        print(f"\nTarget distribution in clinical data:")
-        print(f"Negative (0): {(clinical_filtered['target'] == 0).sum()}")
-        print(f"Positive (1): {(clinical_filtered['target'] == 1).sum()}")
-    
-    clinical_filtered = clinical_filtered.drop_duplicates(
-    subset=['empi_anon','acc_anon','side'], keep='first')
+        print(f"After FinalImageType/ViewPosition filtering: {len(table)}")
 
-    # ===== Split clinical data by laterality =====
-    clin_L = clinical_filtered[clinical_filtered['side'] == 'L'].copy()
-    clin_R = clinical_filtered[clinical_filtered['side'] == 'R'].copy()
-    clin_B = clinical_filtered[clinical_filtered['side'] == 'B'].copy() # empty for datathon .csv
-    clin_NaN = clinical_filtered[clinical_filtered['side'].isna()].copy() # empty for datathon .csv
-    
+    clinical = pd.read_csv(clinical_csv_path, low_memory=False)
     if rank == 0:
-        print(f"\nClinical data by side:")
-        print(f"  L: {len(clin_L)}")
-        print(f"  R: {len(clin_R)}")
-        print(f"  B: {len(clin_B)}")
-        print(f"  NaN: {len(clin_NaN)}")
-    
-    # ===== Merge metadata with clinical data by laterality =====
-    # Side L: match only with ImageLateralityFinal == 'L'
-    merged_L = pd.merge(
-        clin_L, 
-        table[table['ImageLateralityFinal'] == 'L'], 
-        on=['empi_anon', 'acc_anon'],
-        how='inner'
-    )
-    
-    # Side R: match only with ImageLateralityFinal == 'R'
-    merged_R = pd.merge(
-        clin_R, 
-        table[table['ImageLateralityFinal'] == 'R'], 
-        on=['empi_anon', 'acc_anon'],
-        how='inner'
-    )
-    
-    # Side B (bilateral): match with ALL images (both L and R)
-    merged_B = pd.merge(
-        clin_B, 
-        table,  # No laterality filter
-        on=['empi_anon', 'acc_anon'],
-        how='inner'
-    )
-    
-    # Side NaN: match with ALL images (both L and R)
-    merged_NaN = pd.merge(
-        clin_NaN, 
-        table,  # No laterality filter
-        on=['empi_anon', 'acc_anon'],
-        how='inner'
-    )
-    
+        print(f"\nOriginal clinical rows: {len(clinical)}")
+
+    clinical['asses_clean'] = clinical['asses'].astype(str).str.upper()
+    clinical['side'] = clinical['side'].replace('', np.nan).fillna('B')
+
+    # keep only N,B,S,M,K (exclude A,P from classification dataset)
+    keep = {'N', 'B', 'S', 'M', 'K'}
+    clinical = clinical[clinical['asses_clean'].isin(keep)].copy()
     if rank == 0:
-        print(f"\nMerge results by side:")
-        print(f"  L: {len(merged_L)} images")
-        print(f"  R: {len(merged_R)} images")
-        print(f"  B: {len(merged_B)} images")
-        print(f"  NaN: {len(merged_NaN)} images")
-    
-    # Combine all merged data
-    merged_all = pd.concat([merged_L, merged_R, merged_B, merged_NaN], 
-                           ignore_index=True)
-    
+        print("\nBIRADS kept distribution:")
+        print(clinical['asses_clean'].value_counts())
+
     if rank == 0:
-        print(f"\n{'='*60}")
-        print(f"FINAL DATASET SUMMARY")
-        print(f"{'='*60}")
-        print(f"Total images: {len(merged_all)}")
-        print(f"Unique patients: {merged_all['empi_anon'].nunique()}")
-        print(f"Unique accessions: {merged_all['acc_anon'].nunique()}")
-        
-        print(f"\nTarget distribution:")
-        print(f"  Negative (0): {(merged_all['target'] == 0).sum()} ({(merged_all['target'] == 0).mean():.1%})")
-        print(f"  Positive (1): {(merged_all['target'] == 1).sum()} ({(merged_all['target'] == 1).mean():.1%})")
-        
-        print(f"\nLabel distribution:")
-        print(merged_all['label'].value_counts())
-        
-        print(f"\nBIRADS distribution:")
-        print(merged_all['asses_clean'].value_counts())
-        
-        print(f"\nView distribution:")
-        if 'ViewPosition' in merged_all.columns:
-            print(merged_all['ViewPosition'].value_counts())
-        
-        print(f"\nLaterality distribution:")
-        if 'ImageLateralityFinal' in merged_all.columns:
-            print(merged_all['ImageLateralityFinal'].value_counts())
-    
-    # ===== Update file paths (if needed) =====
-    if 'anon_dicom_path' in merged_all.columns:
+        print("\nAggregating to most severe per (patient, exam, side)...")
+
+    # ===== Aggregate to one row per (empi_anon, acc_anon, side) selecting most severe =====
+    agg = clinical.groupby(['empi_anon', 'acc_anon', 'side'], as_index=False).apply(
+        aggregate_by_side_severity, include_groups=False
+    ).reset_index(drop=True)
+
+    if rank == 0:
+        print(f"After aggregation: {len(agg)} rows (one per side per exam)")
+
+    to_target = {'N': 0, 'B': 0, 'S': 1, 'M': 1, 'K': 1}
+    to_label = {'N': 'negative', 'B': 'negative', 'S': 'suspicious', 'M': 'suspicious', 'K': 'suspicious'}
+    agg['target'] = agg['asses_clean'].map(to_target)
+    agg['label'] = agg['asses_clean'].map(to_label)
+
+    # ===== Strict laterality merge to avoid duplication =====
+    clin_L = agg[agg['side'] == 'L'].copy()
+    clin_R = agg[agg['side'] == 'R'].copy()
+    clin_B = agg[agg['side'] == 'B'].copy()
+
+    merged_L = pd.merge(clin_L, table[table['ImageLateralityFinal'] == 'L'], on=['empi_anon', 'acc_anon'], how='inner')
+    merged_R = pd.merge(clin_R, table[table['ImageLateralityFinal'] == 'R'], on=['empi_anon', 'acc_anon'], how='inner')
+
+    merged = pd.concat([merged_L, merged_R], ignore_index=True)
+
+    if 'anon_dicom_path' in merged.columns:
+        DICOM_BASE_OLD = "images/"
         DICOM_BASE_NEW = "/users/scratch1/mg_25/EMBED/images/"
-        DICOM_BASE_OLD = "images/" #<- datathon df
-        # DICOM_BASE_OLD = "/mnt/NAS2/mammo/anon_dicom/" # <- primary df
-        
-        merged_all['new_path'] = merged_all['anon_dicom_path'].str.replace(
-            DICOM_BASE_OLD, DICOM_BASE_NEW, n=1, regex=False
-        )
+        merged['new_path'] = merged['anon_dicom_path'].str.replace(DICOM_BASE_OLD, DICOM_BASE_NEW, n=1, regex=False)
+
+    # Drop df['asses']!=df['exam_birads'], drop rows where we took the most severe but due to exlusion of A and P
+    # there is a mismatch,  we do not want these
+    inconsistent_count = (merged['asses_clean'] != merged['exam_birads']).sum()
+    if inconsistent_count > 0:
         if rank == 0:
-            print(f"\nUpdated DICOM paths to new base directory.")
-    
-    if rank == 0:
-        print(f"{'='*60}\n")
-    dup_count = merged_all.duplicated(subset=['empi_anon', 'acc_anon', 'ImageLateralityFinal', 'ViewPosition']).sum()
+            print(f"Dropping {inconsistent_count} inconsistent rows where 'asses' != 'exam_birads'")
+        merged = merged[merged['asses_clean'] == merged['exam_birads']].copy()
+    # De-duplicate unique images
+    dup_count = merged.duplicated(subset=['empi_anon', 'acc_anon', 'ImageLateralityFinal', 'ViewPosition']).sum()
     if dup_count > 0:
         if rank == 0:
-            print(f"Duplicate image records: {dup_count} of total ({len(merged_all)})")
-        merged_all.drop_duplicates(subset=['empi_anon', 'acc_anon', 'ImageLateralityFinal', 'ViewPosition'], inplace=True)
-        if rank == 0:
-            print(f"Duplicates removed, new count: {len(merged_all)}")
-    
-    return merged_all
+            print(f"Duplicate image records: {dup_count} — removing...")
+        merged.drop_duplicates(subset=['empi_anon', 'acc_anon', 'ImageLateralityFinal', 'ViewPosition'], inplace=True)
+
+    if rank == 0:
+        print(30*"=")
+        print("\nFinal summary")
+        print(f"Total images: {len(merged)}")
+        print(f"Unique patients: {merged['empi_anon'].nunique()}")
+        print(f"Unique accessions: {merged['acc_anon'].nunique()}")
+        print("Label distribution:")
+        print(merged['label'].value_counts())
+        print(merged['label'].value_counts(normalize=True))
+        print(30*"=")
+
+    return merged
 
 
 def split_by_patient_stratified(df: pd.DataFrame, patient_col='empi_anon', label_col='label', val_size=0.2, random_state=42):
