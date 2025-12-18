@@ -82,6 +82,7 @@ def load_and_process_df(metadata_csv_path: str, clinical_csv_path: str, rank: in
     clin_L = agg[agg['side'] == 'L'].copy()
     clin_R = agg[agg['side'] == 'R'].copy()
     clin_B = agg[agg['side'] == 'B'].copy()
+    assert len(clin_B) == 0, "There should be no 'B' side rows after aggregation in datathon"
 
     merged_L = pd.merge(clin_L, table[table['ImageLateralityFinal'] == 'L'], on=['empi_anon', 'acc_anon'], how='inner')
     merged_R = pd.merge(clin_R, table[table['ImageLateralityFinal'] == 'R'], on=['empi_anon', 'acc_anon'], how='inner')
@@ -428,6 +429,45 @@ def create_dataloaders(train_files, val_files, transform, is_ddp, rank, world_si
 
     return train_dl, val_dl, train_sampler
 
+
+def create_test_dataloader(test_files, transform, is_ddp, rank, world_size, num_workers=2, per_gpu_batch=6, seed=42):
+
+    if not is_ddp:
+        labels = test_files['label'].str.lower().map({'negative': 0, 'suspicious': 1}).astype(np.int64).values
+        test_ds = BreastDataset(test_files, transform=transform['val'])
+
+        test_dl = DataLoader(
+            test_ds,
+            batch_size=per_gpu_batch,
+            num_workers=num_workers,
+            pin_memory=torch.cuda.is_available(),
+            worker_init_fn=seed_worker,
+            )
+        return test_dl
+
+    test_ds = BreastDataset(test_files, transform=transform['val'])
+
+    all_idx = None
+
+    obj_list = [all_idx]
+    # broadcast indices
+    dist.broadcast_object_list(obj_list, src=0)
+    all_idx = obj_list[0]
+    if isinstance(all_idx, np.ndarray):
+        all_idx = all_idx.tolist()
+    test_subset = Subset(test_ds, all_idx)
+    test_sampler = DistributedSampler(test_subset, num_replicas=world_size, rank=rank, shuffle=True, drop_last=True)
+
+    test_dl = DataLoader(
+        test_subset,
+        batch_size=per_gpu_batch,
+        num_workers=num_workers,
+        sampler=test_sampler,
+        pin_memory=True,
+        worker_init_fn=seed_worker,
+        )
+
+    return test_dl
 
 def balance_indices(labels, mode='over'):
     assert mode in (None, 'over', 'under'), "mode must be one of None, 'over', 'under'"
