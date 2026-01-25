@@ -391,7 +391,7 @@ def create_dataloaders(train_files, val_files, transform, is_ddp, rank, world_si
     train_labels_arr = train_files['label'].str.lower().map({'negative': 0, 'suspicious': 1}).astype(np.int64).values
 
     if rank == 0:
-        all_idx = balance_indices(train_labels_arr, mode='over')
+        all_idx = balance_indices(train_labels_arr, mode='none')
     else:
         all_idx = None
 
@@ -447,7 +447,11 @@ def create_test_dataloader(test_files, transform, is_ddp, rank, world_size, num_
 
     test_ds = BreastDataset(test_files, transform=transform['val'])
 
-    all_idx = None
+    test_labels_arr = test_files['label'].str.lower().map({'negative': 0, 'suspicious': 1}).astype(np.int64).values
+    if rank == 0:
+        all_idx = balance_indices(test_labels_arr, mode='none')
+    else:
+        all_idx = None
 
     obj_list = [all_idx]
     # broadcast indices
@@ -469,8 +473,8 @@ def create_test_dataloader(test_files, transform, is_ddp, rank, world_size, num_
 
     return test_dl
 
-def balance_indices(labels, mode='over'):
-    assert mode in (None, 'over', 'under'), "mode must be one of None, 'over', 'under'"
+def balance_indices(labels, mode='none'):
+    assert mode in (None, 'over', 'under', 'none'), "mode must be one of None, 'over', 'under', 'none'"
     labels = np.array(labels)
     pos = np.where(labels == 1)[0]
     neg = np.where(labels == 0)[0]
